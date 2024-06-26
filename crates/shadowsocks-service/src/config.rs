@@ -62,6 +62,8 @@ use cfg_if::cfg_if;
 use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig};
 #[cfg(feature = "local-tun")]
 use ipnet::IpNet;
+#[cfg(feature = "local-fake-dns")]
+use ipnet::{Ipv4Net, Ipv6Net};
 use log::warn;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "local-tunnel", feature = "local-dns"))]
@@ -73,6 +75,7 @@ use shadowsocks::{
         ReplayAttackPolicy,
         ServerAddr,
         ServerConfig,
+        ServerSource,
         ServerUser,
         ServerUserManager,
         ServerWeight,
@@ -128,6 +131,14 @@ struct SSConfig {
     local_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     local_port: Option<u16>,
+
+    /// macOS launch activate socket for local_port
+    #[cfg(target_os = "macos")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    launchd_udp_socket_name: Option<String>,
+    #[cfg(target_os = "macos")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    launchd_tcp_socket_name: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     protocol: Option<String>,
@@ -219,6 +230,14 @@ struct SSConfig {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     acl: Option<String>,
+
+    #[cfg(feature = "local-online-config")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<u32>,
+
+    #[cfg(feature = "local-online-config")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    online_config: Option<SSOnlineConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -308,6 +327,20 @@ struct SSLocalExtConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     socks5_auth_config_path: Option<String>,
 
+    /// Fake DNS
+    #[cfg(feature = "local-fake-dns")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fake_dns_record_expire_duration: Option<u64>,
+    #[cfg(feature = "local-fake-dns")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fake_dns_ipv4_network: Option<String>,
+    #[cfg(feature = "local-fake-dns")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fake_dns_ipv6_network: Option<String>,
+    #[cfg(feature = "local-fake-dns")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fake_dns_database_path: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     acl: Option<String>,
 }
@@ -369,6 +402,19 @@ struct SSServerExtConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg(any(target_os = "linux", target_os = "android"))]
     outbound_fwmark: Option<u32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outbound_bind_addr: Option<IpAddr>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outbound_bind_interface: Option<String>,
+}
+
+#[cfg(feature = "local-online-config")]
+#[derive(Serialize, Deserialize, Debug, Default)]
+struct SSOnlineConfig {
+    config_url: String,
+    update_interval: Option<u64>,
 }
 
 /// Server config type
@@ -382,6 +428,11 @@ pub enum ConfigType {
 
     /// Config for Manager server
     Manager,
+
+    /// Config for online config (SIP008)
+    /// https://shadowsocks.org/doc/sip008.html
+    #[cfg(feature = "local-online-config")]
+    OnlineConfig,
 }
 
 impl ConfigType {
@@ -398,6 +449,12 @@ impl ConfigType {
     /// Check if it is manager server type
     pub fn is_manager(self) -> bool {
         self == ConfigType::Manager
+    }
+
+    /// Chec if it is online config type (SIP008)
+    #[cfg(feature = "local-online-config")]
+    pub fn is_online_config(self) -> bool {
+        self == ConfigType::OnlineConfig
     }
 }
 
@@ -760,6 +817,8 @@ pub enum ProtocolType {
     Dns,
     #[cfg(feature = "local-tun")]
     Tun,
+    #[cfg(feature = "local-fake-dns")]
+    FakeDns,
 }
 
 impl ProtocolType {
@@ -777,6 +836,8 @@ impl ProtocolType {
             ProtocolType::Dns => "dns",
             #[cfg(feature = "local-tun")]
             ProtocolType::Tun => "tun",
+            #[cfg(feature = "local-fake-dns")]
+            ProtocolType::FakeDns => "fake-dns",
         }
     }
 
@@ -794,6 +855,8 @@ impl ProtocolType {
             "dns",
             #[cfg(feature = "local-tun")]
             "tun",
+            #[cfg(feature = "local-fake-dns")]
+            "fake-dns",
         ]
     }
 }
@@ -824,6 +887,8 @@ impl FromStr for ProtocolType {
             "dns" => Ok(ProtocolType::Dns),
             #[cfg(feature = "local-tun")]
             "tun" => Ok(ProtocolType::Tun),
+            #[cfg(feature = "local-fake-dns")]
+            "fake-dns" => Ok(ProtocolType::FakeDns),
             _ => Err(ProtocolTypeError),
         }
     }
@@ -835,6 +900,7 @@ pub struct LocalConfig {
     /// Listen address for local servers
     pub addr: Option<ServerAddr>,
 
+    /// Local Protocol
     pub protocol: ProtocolType,
 
     /// Mode
@@ -935,6 +1001,19 @@ pub struct LocalConfig {
     /// SOCKS5 Authentication configuration
     #[cfg(feature = "local")]
     pub socks5_auth: Socks5AuthConfig,
+
+    /// Fake DNS record expire seconds
+    #[cfg(feature = "local-fake-dns")]
+    pub fake_dns_record_expire_duration: Option<Duration>,
+    /// Fake DNS IPv4 allocation space
+    #[cfg(feature = "local-fake-dns")]
+    pub fake_dns_ipv4_network: Option<Ipv4Net>,
+    /// Fake DNS IPv6 allocation space
+    #[cfg(feature = "local-fake-dns")]
+    pub fake_dns_ipv6_network: Option<Ipv6Net>,
+    /// Fake DNS storage database path
+    #[cfg(feature = "local-fake-dns")]
+    pub fake_dns_database_path: Option<PathBuf>,
 }
 
 impl LocalConfig {
@@ -991,6 +1070,15 @@ impl LocalConfig {
 
             #[cfg(feature = "local")]
             socks5_auth: Socks5AuthConfig::default(),
+
+            #[cfg(feature = "local-fake-dns")]
+            fake_dns_record_expire_duration: None,
+            #[cfg(feature = "local-fake-dns")]
+            fake_dns_ipv4_network: None,
+            #[cfg(feature = "local-fake-dns")]
+            fake_dns_ipv6_network: None,
+            #[cfg(feature = "local-fake-dns")]
+            fake_dns_database_path: None,
         }
     }
 
@@ -1123,9 +1211,11 @@ pub struct ServerInstanceConfig {
     pub config: ServerConfig,
     /// Server's private ACL, set to `None` will use the global `AccessControl`
     pub acl: Option<AccessControl>,
-    /// Server's outbound fwmark to support split tunnel
+    /// Server's outbound fwmark / address / interface to support split tunnel
     #[cfg(any(target_os = "linux", target_os = "android"))]
     pub outbound_fwmark: Option<u32>,
+    pub outbound_bind_addr: Option<IpAddr>,
+    pub outbound_bind_interface: Option<String>,
 }
 
 impl ServerInstanceConfig {
@@ -1136,6 +1226,8 @@ impl ServerInstanceConfig {
             acl: None,
             #[cfg(any(target_os = "linux", target_os = "android"))]
             outbound_fwmark: None,
+            outbound_bind_addr: None,
+            outbound_bind_interface: None,
         }
     }
 }
@@ -1154,6 +1246,17 @@ impl LocalInstanceConfig {
     pub fn with_local_config(config: LocalConfig) -> LocalInstanceConfig {
         LocalInstanceConfig { config, acl: None }
     }
+}
+
+/// OnlineConfiguration (SIP008)
+/// https://shadowsocks.org/doc/sip008.html
+#[cfg(feature = "local-online-config")]
+#[derive(Debug, Clone)]
+pub struct OnlineConfig {
+    /// SIP008 URL
+    pub config_url: String,
+    /// Update interval, 3600s by default
+    pub update_interval: Option<Duration>,
 }
 
 /// Configuration
@@ -1256,10 +1359,10 @@ pub struct Config {
     /// This is normally for auto-reloading if implementation supports.
     pub config_path: Option<PathBuf>,
 
-    #[doc(hidden)]
-    /// Workers in runtime
-    /// It should be replaced with metrics APIs: https://github.com/tokio-rs/tokio/issues/4073
-    pub worker_count: usize,
+    /// OnlineConfiguration (SIP008)
+    /// https://shadowsocks.org/doc/sip008.html
+    #[cfg(feature = "local-online-config")]
+    pub online_config: Option<OnlineConfig>,
 }
 
 /// Configuration parsing error kind
@@ -1287,6 +1390,12 @@ pub struct Error {
 impl Error {
     pub fn new(kind: ErrorKind, desc: &'static str, detail: Option<String>) -> Error {
         Error { kind, desc, detail }
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        self.desc
     }
 }
 
@@ -1374,7 +1483,8 @@ impl Config {
 
             config_path: None,
 
-            worker_count: 1,
+            #[cfg(feature = "local-online-config")]
+            online_config: None,
         }
     }
 
@@ -1461,6 +1571,15 @@ impl Config {
                             }
                         },
                     };
+                    #[cfg(target_os = "macos")]
+                    {
+                        local_config
+                            .launchd_tcp_socket_name
+                            .clone_from(&config.launchd_tcp_socket_name);
+                        local_config
+                            .launchd_udp_socket_name
+                            .clone_from(&config.launchd_udp_socket_name);
+                    }
 
                     let local_instance = LocalInstanceConfig {
                         config: local_config,
@@ -1664,6 +1783,36 @@ impl Config {
                             local_config.socks5_auth = Socks5AuthConfig::load_from_file(&socks5_auth_config_path)?;
                         }
 
+                        #[cfg(feature = "local-fake-dns")]
+                        {
+                            if let Some(d) = local.fake_dns_record_expire_duration {
+                                local_config.fake_dns_record_expire_duration = Some(Duration::from_secs(d));
+                            }
+                            if let Some(n) = local.fake_dns_ipv4_network {
+                                match n.parse::<Ipv4Net>() {
+                                    Ok(n) => local_config.fake_dns_ipv4_network = Some(n),
+                                    Err(..) => {
+                                        let err =
+                                            Error::new(ErrorKind::Malformed, "invalid `fake_dns_ipv4_network`", None);
+                                        return Err(err);
+                                    }
+                                }
+                            }
+                            if let Some(n) = local.fake_dns_ipv6_network {
+                                match n.parse::<Ipv6Net>() {
+                                    Ok(n) => local_config.fake_dns_ipv6_network = Some(n),
+                                    Err(..) => {
+                                        let err =
+                                            Error::new(ErrorKind::Malformed, "invalid `fake_dns_ipv6_network`", None);
+                                        return Err(err);
+                                    }
+                                }
+                            }
+                            if let Some(p) = local.fake_dns_database_path {
+                                local_config.fake_dns_database_path = Some(p.into());
+                            }
+                        }
+
                         let mut local_instance = LocalInstanceConfig {
                             config: local_config,
                             acl: None,
@@ -1694,7 +1843,32 @@ impl Config {
                 //
                 // This behavior causes lots of confusion. use outbound_bind_addr instead
             }
+            #[cfg(feature = "local-online-config")]
+            ConfigType::OnlineConfig => {
+                // SIP008. https://shadowsocks.org/doc/sip008.html
+                // "version" should be set to "1"
+                match config.version {
+                    Some(1) => {}
+                    Some(v) => {
+                        let err = Error::new(
+                            ErrorKind::Invalid,
+                            "invalid online config version",
+                            Some(format!("version: {v}")),
+                        );
+                        return Err(err);
+                    }
+                    None => {
+                        warn!("OnlineConfig \"version\" is missing in the configuration, assuming it is a compatible version for this project");
+                    }
+                }
+            }
         }
+
+        let server_source = match config_type {
+            ConfigType::Local | ConfigType::Server | ConfigType::Manager => ServerSource::Configuration,
+            #[cfg(feature = "local-online-config")]
+            ConfigType::OnlineConfig => ServerSource::OnlineConfig,
+        };
 
         // Standard config
         // Server
@@ -1738,6 +1912,7 @@ impl Config {
                 };
 
                 let mut nsvr = ServerConfig::new(addr, password, method);
+                nsvr.set_source(server_source);
                 nsvr.set_mode(global_mode);
 
                 if let Some(ref p) = config.plugin {
@@ -1771,11 +1946,25 @@ impl Config {
                     nsvr.set_timeout(timeout);
                 }
 
+                let mut outbound_bind_addr: Option<IpAddr> = None;
+
+                if let Some(ref bind_addr) = config.outbound_bind_addr {
+                    match bind_addr.parse::<IpAddr>() {
+                        Ok(b) => outbound_bind_addr = Some(b),
+                        Err(..) => {
+                            let err = Error::new(ErrorKind::Invalid, "invalid outbound_bind_addr", None);
+                            return Err(err);
+                        }
+                    }
+                }
+
                 let server_instance = ServerInstanceConfig {
                     config: nsvr,
                     acl: None,
                     #[cfg(any(target_os = "linux", target_os = "android"))]
                     outbound_fwmark: config.outbound_fwmark,
+                    outbound_bind_addr,
+                    outbound_bind_interface: config.outbound_bind_interface.clone(),
                 };
 
                 nconfig.server.push(server_instance);
@@ -1843,6 +2032,7 @@ impl Config {
                 };
 
                 let mut nsvr = ServerConfig::new(addr, password, method);
+                nsvr.set_source(server_source);
 
                 // Extensible Identity Header, Users
                 if let Some(users) = svr.users {
@@ -1939,11 +2129,25 @@ impl Config {
                     nsvr.set_weight(weight);
                 }
 
+                let mut outbound_bind_addr: Option<IpAddr> = None;
+
+                if let Some(ref bind_addr) = config.outbound_bind_addr {
+                    match bind_addr.parse::<IpAddr>() {
+                        Ok(b) => outbound_bind_addr = Some(b),
+                        Err(..) => {
+                            let err = Error::new(ErrorKind::Invalid, "invalid outbound_bind_addr", None);
+                            return Err(err);
+                        }
+                    }
+                }
+
                 let mut server_instance = ServerInstanceConfig {
                     config: nsvr,
                     acl: None,
                     #[cfg(any(target_os = "linux", target_os = "android"))]
                     outbound_fwmark: config.outbound_fwmark,
+                    outbound_bind_addr,
+                    outbound_bind_interface: config.outbound_bind_interface.clone(),
                 };
 
                 if let Some(acl_path) = svr.acl {
@@ -1964,6 +2168,14 @@ impl Config {
                 #[cfg(any(target_os = "linux", target_os = "android"))]
                 if let Some(outbound_fwmark) = svr.outbound_fwmark {
                     server_instance.outbound_fwmark = Some(outbound_fwmark);
+                }
+
+                if let Some(outbound_bind_addr) = svr.outbound_bind_addr {
+                    server_instance.outbound_bind_addr = Some(outbound_bind_addr);
+                }
+
+                if let Some(ref outbound_bind_interface) = svr.outbound_bind_interface {
+                    server_instance.outbound_bind_interface = Some(outbound_bind_interface.clone());
                 }
 
                 nconfig.server.push(server_instance);
@@ -2167,6 +2379,14 @@ impl Config {
                 }
             };
             nconfig.acl = Some(acl);
+        }
+
+        #[cfg(feature = "local-online-config")]
+        if let Some(online_config) = config.online_config {
+            nconfig.online_config = Some(OnlineConfig {
+                config_url: online_config.config_url,
+                update_interval: online_config.update_interval.map(Duration::from_secs),
+            });
         }
 
         Ok(nconfig)
@@ -2380,6 +2600,16 @@ impl Config {
             return Err(err);
         }
 
+        #[cfg(feature = "local-online-config")]
+        if self.config_type.is_online_config() && self.server.is_empty() {
+            let err = Error::new(
+                ErrorKind::MissingField,
+                "missing any valid servers in configuration",
+                None,
+            );
+            return Err(err);
+        }
+
         if self.config_type.is_manager() && self.manager.is_none() {
             let err = Error::new(
                 ErrorKind::MissingField,
@@ -2420,6 +2650,20 @@ impl Config {
                             return Err(err);
                         }
                     }
+
+                    #[cfg(feature = "local-online-config")]
+                    if self.config_type.is_online_config() {
+                        // Only server could bind to INADDR_ANY
+                        let ip = sa.ip();
+                        if ip.is_unspecified() {
+                            let err = Error::new(
+                                ErrorKind::Malformed,
+                                "`server` shouldn't be an unspecified address (INADDR_ANY)",
+                                None,
+                            );
+                            return Err(err);
+                        }
+                    }
                 }
                 ServerAddr::DomainName(dn, port) => {
                     if dn.is_empty() || *port == 0 {
@@ -2435,6 +2679,19 @@ impl Config {
 
             // Users' key must match key length
             if let Some(user_manager) = server.user_manager() {
+                #[cfg(feature = "aead-cipher-2022")]
+                if server.method().is_aead_2022() {
+                    use shadowsocks::config::method_support_eih;
+                    if user_manager.user_count() > 0 && !method_support_eih(server.method()) {
+                        let err = Error::new(
+                            ErrorKind::Invalid,
+                            "server method doesn't support Extended Identity Header (EIH), remove `users`",
+                            Some(format!("method {}", server.method())),
+                        );
+                        return Err(err);
+                    }
+                }
+
                 let key_len = server.method().key_len();
                 for user in user_manager.users_iter() {
                     if user.key().len() != key_len {
@@ -2473,6 +2730,12 @@ impl fmt::Display for Config {
                         ServerAddr::SocketAddr(ref sa) => sa.port(),
                         ServerAddr::DomainName(.., port) => *port,
                     });
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    jconf.launchd_tcp_socket_name.clone_from(&local.launchd_tcp_socket_name);
+                    jconf.launchd_udp_socket_name.clone_from(&local.launchd_udp_socket_name);
                 }
 
                 if local.protocol != ProtocolType::Socks {
@@ -2596,6 +2859,18 @@ impl fmt::Display for Config {
 
                         #[cfg(feature = "local")]
                         socks5_auth_config_path: None,
+
+                        #[cfg(feature = "local-fake-dns")]
+                        fake_dns_record_expire_duration: local.fake_dns_record_expire_duration.map(|d| d.as_secs()),
+                        #[cfg(feature = "local-fake-dns")]
+                        fake_dns_ipv4_network: local.fake_dns_ipv4_network.map(|n| n.to_string()),
+                        #[cfg(feature = "local-fake-dns")]
+                        fake_dns_ipv6_network: local.fake_dns_ipv6_network.map(|n| n.to_string()),
+                        #[cfg(feature = "local-fake-dns")]
+                        fake_dns_database_path: local
+                            .fake_dns_database_path
+                            .as_ref()
+                            .and_then(|n| n.to_str().map(ToOwned::to_owned)),
 
                         acl: local_instance
                             .acl
@@ -2721,7 +2996,9 @@ impl fmt::Display for Config {
                             .as_ref()
                             .and_then(|a| a.file_path().to_str().map(ToOwned::to_owned)),
                         #[cfg(any(target_os = "linux", target_os = "android"))]
-                        outbound_fwmark: inst.outbound_fwmark.clone(),
+                        outbound_fwmark: inst.outbound_fwmark,
+                        outbound_bind_addr: inst.outbound_bind_addr,
+                        outbound_bind_interface: inst.outbound_bind_interface.clone(),
                     });
                 }
 
@@ -2825,7 +3102,7 @@ impl fmt::Display for Config {
         }
 
         jconf.outbound_bind_addr = self.outbound_bind_addr.map(|i| i.to_string());
-        jconf.outbound_bind_interface = self.outbound_bind_interface.clone();
+        jconf.outbound_bind_interface.clone_from(&self.outbound_bind_interface);
 
         // Security
         if self.security.replay_attack.policy != ReplayAttackPolicy::default() {
@@ -2848,6 +3125,15 @@ impl fmt::Display for Config {
         // ACL
         if let Some(ref acl) = self.acl {
             jconf.acl = Some(acl.file_path().to_str().unwrap().to_owned());
+        }
+
+        // OnlineConfig
+        #[cfg(feature = "local-online-config")]
+        if let Some(ref online_config) = self.online_config {
+            jconf.online_config = Some(SSOnlineConfig {
+                config_url: online_config.config_url.clone(),
+                update_interval: online_config.update_interval.as_ref().map(Duration::as_secs),
+            });
         }
 
         write!(f, "{}", json5::to_string(&jconf).unwrap())

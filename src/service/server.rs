@@ -124,6 +124,14 @@ pub fn define_command_line_options(mut app: Command) -> Command {
                 .help("SIP003 (https://shadowsocks.org/guide/sip003.html) plugin"),
         )
         .arg(
+            Arg::new("PLUGIN_MODE")
+                .long("plugin-mode")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .requires("PLUGIN")
+                .help("SIP003/SIP003u plugin mode, must be one of `tcp_only` (default), `udp_only` and `tcp_and_udp`"),
+        )
+        .arg(
             Arg::new("PLUGIN_OPT")
                 .long("plugin-opts")
                 .num_args(1)
@@ -358,7 +366,13 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
                     plugin: p,
                     plugin_opts: matches.get_one::<String>("PLUGIN_OPT").cloned(),
                     plugin_args: Vec::new(),
-                    plugin_mode: Mode::TcpOnly,
+                    plugin_mode: matches
+                        .get_one::<String>("PLUGIN_MODE")
+                        .map(|x| {
+                            x.parse::<Mode>()
+                                .expect("plugin-mode must be one of `tcp_only` (default), `udp_only` and `tcp_and_udp`")
+                        })
+                        .unwrap_or(Mode::TcpOnly),
                 };
 
                 sc.set_plugin(plugin);
@@ -506,23 +520,18 @@ pub fn create(matches: &ArgMatches) -> Result<(Runtime, impl Future<Output = Exi
 
         info!("shadowsocks server {} build {}", crate::VERSION, crate::BUILD_TIME);
 
-        let mut worker_count = 1;
         let mut builder = match service_config.runtime.mode {
             RuntimeMode::SingleThread => Builder::new_current_thread(),
             #[cfg(feature = "multi-threaded")]
             RuntimeMode::MultiThread => {
                 let mut builder = Builder::new_multi_thread();
                 if let Some(worker_threads) = service_config.runtime.worker_count {
-                    worker_count = worker_threads;
                     builder.worker_threads(worker_threads);
-                } else {
-                    worker_count = num_cpus::get();
                 }
 
                 builder
             }
         };
-        config.worker_count = worker_count;
 
         let runtime = builder.enable_all().build().expect("create tokio Runtime");
 

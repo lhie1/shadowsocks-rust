@@ -9,8 +9,6 @@
 [![crates.io](https://img.shields.io/crates/v/shadowsocks-rust.svg)](https://crates.io/crates/shadowsocks-rust)
 [![Release](https://img.shields.io/github/release/shadowsocks/shadowsocks-rust.svg)](https://github.com/shadowsocks/shadowsocks-rust/releases)
 [![shadowsocks-rust](https://img.shields.io/archlinux/v/extra/x86_64/shadowsocks-rust)](https://archlinux.org/packages/extra/x86_64/shadowsocks-rust/)
-[![archlinuxcn shadowsocks-rust-git](https://img.shields.io/badge/dynamic/json?label=archlinuxcn-git&query=%24.version&url=https%3A%2F%2Fbuild.archlinuxcn.org%2Fapi%2Fv2%2Fpackages%2Fshadowsocks-rust-git)](https://build.archlinuxcn.org/)
-[![archlinuxcn shadowsocks-rust-opt-git](https://img.shields.io/badge/dynamic/json?label=archlinuxcn-opt-git&query=%24.version&url=https%3A%2F%2Fbuild.archlinuxcn.org%2Fapi%2Fv2%2Fpackages%2Fshadowsocks-rust-opt-git)](https://build.archlinuxcn.org/)
 [![aur shadowsocks-rust-git](https://img.shields.io/aur/version/shadowsocks-rust-git)](https://aur.archlinux.org/packages/shadowsocks-rust-git)
 [![NixOS](https://img.shields.io/badge/NixOS-shadowsocks--rust-blue?logo=nixos)](https://github.com/NixOS/nixpkgs/tree/master/pkgs/tools/networking/shadowsocks-rust)
 [![snap shadowsocks-rust](https://snapcraft.io/shadowsocks-rust/badge.svg)](https://snapcraft.io/shadowsocks-rust)
@@ -52,7 +50,11 @@ Related Projects:
 
 - `local-dns` - Allow using dns protocol for `sslocal`, serves as a DNS server proxying queries to local or remote DNS servers by ACL rules
 
+- `local-fake-dns` - FakeDNS, allocating an IP address for each individual Query from a specific IP pool
+
 - `local-tun` - [TUN](https://en.wikipedia.org/wiki/TUN/TAP) interface support for `sslocal`
+
+- `local-online-config` - [SIP008](https://shadowsocks.org/doc/sip008.html) Online Configuration Delivery
 
 - `stream-cipher` - Enable deprecated stream ciphers. WARN: stream ciphers are UNSAFE!
 
@@ -649,6 +651,25 @@ Example configuration:
             // Linux/Android: tproxy (default)
             // FreeBSD/OpenBSD: pf (default)
             "udp_redir": "tproxy"
+        },
+        {
+            // FakeDNS local server (feature = "local-fake-dns")
+            // FakeDNS is a DNS server that allocates an IPv4 / IPv6 address in a specific pool for each queries.
+            // Subsequence requests from the other local interfaces that the target addresses includes those allocated IP addresses,
+            // will be substituted back to their original domain name addresses.
+            // This feature is useful mostly for transparent proxy, which will allow the proxied domain names to be resolved remotely.
+            "protocol": "fake-dns",
+            // Listen address
+            "local_address": "127.0.0.1",
+            "local_port": 10053,
+            // IPv4 address pool (for A records)
+            "fake_dns_ipv4_network": "10.255.0.0/16",
+            // IPv6 address pool (for AAAA records)
+            "fake_dns_ipv6_network": "fdf2:e786:ab40:9d2f::/64",
+            // Persistent storage for all allocated DNS records
+            "fake_dns_database_path": "/var/shadowsocks/fakedns.db",
+            // OPTIONAL: Record expire duration in seconds, 10s by default
+            "fake_dns_record_expire_duration": 10
         }
     ],
 
@@ -803,6 +824,14 @@ Example configuration:
         // Interval seconds between each check for the best server
         // Optional. Specify to enable shorter checking interval for the best server only.
         "check_best_interval": 5
+    },
+
+    // SIP008 Online Configuration Delivery
+    // https://shadowsocks.org/doc/sip008.html
+    "online_config": {
+        "config_url": "https://path-to-online-sip008-configuration",
+        // Optional. Seconds between each update to config_url. Default to 3600s
+        "update_interval": 3600
     },
 
     // Service configurations

@@ -1,3 +1,108 @@
+shadowsocks-rust (1.20.1) unstable; urgency=medium
+
+  ## Bug Fixes
+
+  - `local-online-config`: SIP008 auto reload configuration task will add online servers without replacing the existed ones. This bug will eventually cause `sslocal` consumes too many memories and get OOM killed.
+
+  Users are encourage to update to this version if using 1.19.4 to 1.20.0.
+
+  ## Features
+
+  - `shadowsocks-service`: Updated [`rustls`](https://crates.io/crates/rustls) to v0.23 with [`ring`](https://crates.io/crates/ring) backend.
+  - `local-redir`, `server`: Better approach to check current platform IP stack capabilities like Go (IPv4, IPv6, IPv4-mapped-IPv6 supports).
+  - Explicitly enable dual-stack if listen addresses (`server`, `local_address`) are IPv4-mapped-IPv6, by setting `IPV6_V6ONLY=0`.
+
+shadowsocks-rust (1.20.0) unstable; urgency=medium
+
+  ## Breaking Changes
+
+  - #887 shadowsocks stream cipher (`TABLE`) doesn't need to make a derived key instead of using user's predefined key directly. This change will make shadowsocks-rust not going to be compatible with its older version. Users who are using `TABLE` cipher should upgrade all your local and server instances to the latest version of shadowsocks-rust. On the other hand, `TABLE` cipher is marked deprecated because it is vulnerable, users **must** migrate to other more secured methods immediately.
+
+shadowsocks-rust (1.19.4) unstable; urgency=medium
+
+  ## Features
+
+  - `local-online-config`: Making HTTP requests with `local-http`'s HttpClient implementation, mainly for supporting `outbound_*` socket configurations.
+
+  ## Miscellaneous
+
+  - Fixed build failures on some platforms.
+
+shadowsocks-rust (1.19.3) unstable; urgency=medium
+
+  ## Breaking Changes
+
+  - Feature `dns-over-h3` moved from feature `full` to `full-extra`. DNS over H3 is still an experimental feature.
+  - `local-fake-dns`: Disabled compression (zstd), which seems to be deprecated by [`sled`](https://crates.io/crates/sled).
+
+  ## Features
+
+  - `local-online-config`: Set 30s timeout for update HTTP requests.
+
+shadowsocks-rust (1.19.2) unstable; urgency=medium
+
+  ## Bug Fixes
+
+  - `local-tun`: `tun2` handles IP packet information automatically.
+
+shadowsocks-rust (1.19.1) unstable; urgency=medium
+
+  ## Features
+
+  - Rollback `rustls` to v0.22, v0.23 first introduced `aws-lc` as the default crypto implementation, but it cannot be built on some targets if there are still older versions of `rustls` in the dependency tree.
+  - `local-tun`: Switch from `tun` to `tun2`, which is a fork of `tun`. `tun` seems to be abandoned.
+
+  ## Bug Fixes
+
+  - #1539 `local-fake-dns`: Query Response Message has to include the original Query and flags.
+
+shadowsocks-rust (1.19.0) unstable; urgency=medium
+
+  ## Features
+
+  - #302 `sslocal` support SIP008 Online Configuration. Pull `servers` from remote servers automatically. (Experimental)
+  - Add `basic`, `full`, `full-extra` features makes building command line arguments shorter
+  
+  ## Bug Fixes
+
+  - #1525 Check `"users"` in server configuration if `method` doesn't support AEAD-2022 EIH.
+  - #1528 Fixed FreeBSD build.
+
+  ## Miscellaneous
+
+  - Snap: Add alias names like `sslocal`, `ssserver`, ...
+  - `local-tun` feature could be enabled even if target platform is not supported.
+
+  ## BREAKING
+
+  - Minimal Supported Rust Version (MSRV) is v1.74
+
+shadowsocks-rust (1.18.4) unstable; urgency=medium
+
+  ## Features
+
+  - #1495 Binaries support `--plugin-mode` command line argument
+  - `local-tun` is enabled by default for Windows targets in CI builds
+
+  ## Bug Fixes
+
+  - #1516 `local-dns` UDP client support AEAD-2022 protocol properly
+
+shadowsocks-rust (1.18.3) unstable; urgency=medium
+
+  ## Features
+
+  - #1466 Support `outbound_fwmark` in server side to split outbound tunnel
+  - #1467 Default build for `*-windows-*` targets includes `sswinservice`
+  - `local-fakedns`: Add a basic implementation of Fake-DNS, which will allocate IPs from pool for DNS queries. This experimental feature could be useful when using `local-tun`, `local-redir` or other features that could only receive IP destinations, the domain name that is resolved by the Fake-DNS will be translated from IP back to domain name when connecting to the remote.
+  - #1500 Add `launchd_udp_socket_name`, `launchd_tcp_socket_name` to basic config format
+
+  ## Bug Fixes
+
+  - Fixed build on OpenBSD
+  - #1491 Fixed per-server outbound options not taking effect
+  - #1509 `local-tun` TCP socket creation made non-blocking
+
 shadowsocks-rust (1.18.2) unstable; urgency=medium
 
   ## Features

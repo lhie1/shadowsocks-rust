@@ -301,6 +301,15 @@ impl Default for ServerUserManager {
     }
 }
 
+/// The source of the ServerConfig
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ServerSource {
+    Default,       //< Default source, created in code
+    Configuration, //< Created from configuration
+    CommandLine,   //< Created from command line
+    OnlineConfig,  //< Created from online configuration (SIP008)
+}
+
 /// Configuration for a server
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -340,6 +349,9 @@ pub struct ServerConfig {
 
     /// Weight
     weight: ServerWeight,
+
+    /// Source
+    source: ServerSource,
 }
 
 #[cfg(feature = "aead-cipher-2022")]
@@ -392,6 +404,14 @@ where
     P: Into<String>,
 {
     let password = password.into();
+
+    #[cfg(feature = "stream-cipher")]
+    if method == CipherKind::SS_TABLE {
+        // TABLE cipher doesn't need key derivation.
+        // Reference implemenation: shadowsocks-libev, shadowsocks (Python)
+        let enc_key = password.clone().into_bytes().into_boxed_slice();
+        return (password, enc_key, Vec::new());
+    }
 
     #[cfg(feature = "aead-cipher-2022")]
     if method_support_eih(method) {
@@ -452,6 +472,7 @@ impl ServerConfig {
             id: None,
             mode: Mode::TcpAndUdp, // Server serves TCP & UDP by default
             weight: ServerWeight::new(),
+            source: ServerSource::Default,
         }
     }
 
@@ -616,6 +637,16 @@ impl ServerConfig {
     /// Set server's balancer weight
     pub fn set_weight(&mut self, weight: ServerWeight) {
         self.weight = weight;
+    }
+
+    /// Get server's source
+    pub fn source(&self) -> ServerSource {
+        self.source
+    }
+
+    /// Set server's source
+    pub fn set_source(&mut self, source: ServerSource) {
+        self.source = source;
     }
 
     /// Get URL for QRCode
@@ -815,7 +846,10 @@ impl ServerConfig {
         }
 
         if let Some(frag) = parsed.fragment() {
-            svrconfig.set_remarks(frag);
+            match percent_encoding::percent_decode_str(frag).decode_utf8() {
+                Ok(m) => svrconfig.set_remarks(m),
+                Err(..) => svrconfig.set_remarks(frag),
+            }
         }
 
         Ok(svrconfig)

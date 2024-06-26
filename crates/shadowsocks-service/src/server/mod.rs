@@ -116,6 +116,14 @@ pub async fn run(config: Config) -> io::Result<()> {
             connect_opts.fwmark = Some(fwmark);
         }
 
+        if let Some(bind_local_addr) = inst.outbound_bind_addr {
+            connect_opts.bind_local_addr = Some(bind_local_addr);
+        }
+
+        if let Some(bind_interface) = inst.outbound_bind_interface {
+            connect_opts.bind_interface = Some(bind_interface);
+        }
+
         server_builder.set_connect_opts(connect_opts.clone());
         server_builder.set_accept_opts(accept_opts.clone());
 
@@ -140,10 +148,6 @@ pub async fn run(config: Config) -> io::Result<()> {
 
         if config.ipv6_first {
             server_builder.set_ipv6_first(config.ipv6_first);
-        }
-
-        if config.worker_count >= 1 {
-            server_builder.set_worker_count(config.worker_count);
         }
 
         server_builder.set_security_config(&config.security);
